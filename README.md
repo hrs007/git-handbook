@@ -485,3 +485,239 @@ Then use `git st` or `git lg`. Learn the full command first so aliases do not hi
 5. **Useful extras:** `tag`, `clean`, `worktree`, `add -p`.
 
 You do not need to memorize every option. Build the habit of checking `git status`, reviewing `git diff` and `git diff --staged`, and understanding whether a command changes the working tree, index, local commits, or remote repository.
+
+## 🧱 Hunks, explained in detail
+
+A **hunk** is one section of a diff: a header followed by nearby removed and added lines. A diff hunk often looks like this:
+
+```diff
+@@ -10,4 +10,5 @@ function calculateTotal(items) {
+   const subtotal = sum(items);
+-  return subtotal;
++  const tax = subtotal * taxRate;
++  return subtotal + tax;
+ }
+```
+
+The header `@@ -10,4 +10,5 @@` says the old version shows four lines starting at line 10 and the new version shows five lines starting at line 10. A line beginning with a space is unchanged context; `-` is removed from the old version; `+` is added in the new version. The context helps Git locate the edit when applying it.
+
+Git groups nearby changed lines into one hunk. Two edits may appear together when they are close enough that their surrounding context overlaps. If the changes are far apart, Git usually presents separate hunks. Hunk boundaries are a diff display choice; they do not necessarily correspond to whole functions, features, or commits.
+
+### Why stage by hunk?
+
+The working tree is your full in-progress version of the files. The index is a separate snapshot that you assemble for the next commit. Partial staging lets the index contain only some edits from a file, while the rest stays in the working tree. This makes it possible to create focused commits without first rearranging code or making temporary copies.
+
+For example, if one file contains a bug fix and an unrelated formatting change, you can stage the bug fix hunk, commit it, and leave the formatting change unstaged for a later commit. A commit records the index, not every edit currently visible in your editor.
+
+### Prepare before choosing hunks
+
+```bash
+git status --short
+git diff -- src/example.js
+git add -p -- src/example.js
+```
+
+Review the full unstaged diff first so you know which edits exist. Supplying a path limits the interactive session to that file. You can run `git add -p` without a path to review changes across files. If changes are already staged and you run `git add -p` again, Git interactively stages the remaining unstaged changes; it does not remove existing staged content.
+
+### Read the patch prompt
+
+Git prints a patch hunk and asks what to do. Use `?` to show the choices supported by your installed Git version. Common choices are:
+
+| Key | Effect on the current hunk |
+| --- | --- |
+| `y` | Add the entire displayed hunk to the index. |
+| `n` | Leave it out of the index and continue. The edits remain in the working tree. |
+| `s` | Split it into smaller hunks, if Git can separate the changes. Git then prompts for each smaller piece. |
+| `e` | Open the patch in an editor so you can adjust which changed lines are staged. |
+| `q` | Stop the session. Changes already staged during this session stay staged. |
+| `a` | Stage this hunk and every later hunk in this file. |
+| `d` | Skip this hunk and every later hunk in this file. |
+| `?` | Print the interactive help. |
+
+When a hunk contains multiple nearby changes, try `s` first. If Git says the hunk cannot be split further, its changed lines may be too close or the context may overlap. Then either stage the whole hunk with `y`, leave it with `n`, or edit it with `e`.
+
+### Split a hunk into smaller pieces
+
+Suppose one displayed hunk contains a correctness fix and a nearby debug statement. At the hunk prompt, enter:
+
+```text
+s
+```
+
+Git attempts to divide the large hunk into smaller hunks. Inspect each new patch carefully. Enter `y` for the bug fix and `n` for the debug statement. Splitting depends on the actual lines and context; Git may not be able to separate adjacent edits. If it cannot split, manual editing is the next option.
+
+### Edit a patch manually
+
+At a hunk prompt, enter `e`. Git opens a temporary patch in your configured editor. This patch is a small diff language, not the source file itself.
+
+For each changed source line, the first character controls what the patch means:
+
+- `+` means the line is added in the new version.
+- `-` means the line is removed from the old version.
+- A leading space means the line is unchanged context.
+
+To leave an added line out, delete that `+` line from the temporary patch. To leave a deletion out, change its leading `-` to a space so the line becomes context (it remains in the file). Keep the `@@ ... @@` hunk header and surrounding context intact. Git can recalculate hunk line counts for an edited patch; if it reports that the patch does not apply, cancel the edit and use `s` or stage the whole hunk instead.
+
+Example original patch:
+
+```diff
+@@ -20,3 +20,5 @@
+ const total = sum(items);
++console.log(total);
++return total + tax;
+ }
+```
+
+To stage only the return line and leave the debug print unstaged, remove the `+console.log(total);` line from the temporary patch:
+
+```diff
+@@ -20,3 +20,4 @@
+ const total = sum(items);
++return total + tax;
+ }
+```
+
+The exact editor behavior depends on your Git configuration. Save and close the editor to ask Git to apply the edited patch. If Git rejects the patch, the index is not updated by that failed edit; reopen `git add -p`, choose a smaller hunk or make a valid edit, then inspect the result. If you do not want the edit, exit the editor without saving and verify with `git status` and `git diff --staged`.
+
+Manual patch editing is powerful but easy to get wrong. When nearby edits can be staged together safely, prefer `s` followed by `y` or `n`; use `e` when you need finer control.
+
+### Verify the index and working tree separately
+
+After the interactive session, always inspect both sides:
+
+```bash
+git diff --staged   # The exact changes the next commit will contain
+git diff            # Remaining unstaged changes in tracked files
+git status          # Staged, unstaged, and untracked paths
+```
+
+Think of `git diff --staged` as **index versus last commit**, and plain `git diff` as **working tree versus index**. A line can appear in one diff but not the other because the index and working tree are separate snapshots.
+
+Before committing, check that the staged diff contains the complete intended change: a staged addition should not depend on an unstaged edit that is required to make it work. Also check that secrets, generated files, and unrelated edits are absent.
+
+### Unstage a hunk without losing the edit
+
+If the wrong hunk entered the index, interactively remove it from the staged snapshot:
+
+```bash
+git restore --staged -p -- src/example.js
+```
+
+This presents staged changes and lets you select hunks to unstage. It leaves the file contents in the working tree. `git restore --staged src/example.js` unstages all changes for that file, which is simpler when you want to start over. Then rerun `git add -p` and review the staged diff again.
+
+### Commit only the selected pieces
+
+```bash
+git diff --staged
+git commit -m "Fix total calculation"
+git status
+git diff
+```
+
+The commit includes the index snapshot at commit time. Any unstaged edit remains in the working tree. After committing, it is normal for `git status` to show a modified file: that means part of the file is still waiting for a later commit.
+
+If you staged a new untracked file partially, use `git add -N path/to/file` first to make Git show its contents as a diff, then run `git add -p`. Review the result carefully; new-file partial staging can be less intuitive than staging edits to an already tracked file.
+
+### Common hunk-staging mistakes
+
+- **Thinking `n` discards a change:** it only leaves that hunk unstaged. The edit remains on disk.
+- **Thinking `q` rolls back earlier choices:** it stops prompting, but already selected hunks remain staged.
+- **Editing source text instead of the patch markers:** the `e` editor edits a patch. Preserve line content and alter the leading marker to change staging selection.
+- **Committing without reviewing the index:** `git commit` records staged changes, which may be only part of the file.
+- **Assuming stage state is all-or-nothing per file:** the index can represent some lines from a file while other lines remain unstaged.
+- **Using `git add .` after carefully staging hunks:** that can stage the rest of the changes too. Recheck `git diff --staged` before committing.
+
+## ➕ More useful commands for everyday work
+
+### Compare versions and inspect commits
+
+```bash
+git diff --check                       # Find whitespace errors in unstaged changes
+git diff --staged --check              # Check staged changes for whitespace errors
+git diff --stat                        # Summarize unstaged changes by file
+git diff --staged --stat               # Summarize staged changes by file
+git show --stat --oneline <commit>     # Show a commit summary
+git log -5 --oneline                   # Show the last five commits
+git log --oneline main..feature        # Commits in feature that are not in main
+git log --oneline main...feature       # Commits reachable from either side, excluding common history
+git diff main...feature                # Changes feature introduces since it split from main
+```
+
+`A..B` generally asks which commits are reachable from `B` but not `A`. `A...B` in a commit log shows commits unique to either side. In `git diff`, `main...feature` compares the merge base of `main` and `feature` to `feature`, which is useful for reviewing a branch's proposed changes.
+
+### Apply one commit with cherry-pick
+
+Cherry-pick copies the change from an existing commit onto the current branch and creates a new commit with a new ID. Use it when you need one fix from another branch without merging all of that branch.
+
+```bash
+git switch release
+git cherry-pick <commit>
+```
+
+For several adjacent commits, use a range carefully:
+
+```bash
+git cherry-pick <oldest-commit>^..<newest-commit>
+```
+
+If conflicts occur, resolve files, stage them, and run `git cherry-pick --continue`. Use `git cherry-pick --abort` to cancel. Cherry-picking duplicates a change in history; when you need the whole branch, merging or rebasing is usually clearer.
+
+### Clean untracked files safely
+
+`git clean` removes files that Git does not track. It does not move them to the Git history, so preview first:
+
+```bash
+git clean -n       # Preview untracked files in this directory
+git clean -nd      # Preview untracked files and directories
+git clean -i       # Review an interactive cleanup menu
+```
+
+Only after confirming the preview should you use `git clean -f` or `git clean -fd` to delete files. `-x` also includes ignored files, which can remove build outputs or local configuration; avoid it unless you know exactly what will be removed. `git clean` cannot delete tracked modifications; use `git restore` for those, with the same caution.
+
+### Move and remove tracked files
+
+```bash
+git mv old-name.txt new-name.txt   # Move/rename and stage the operation
+git rm old-name.txt                # Remove from disk and stage the removal
+git rm --cached .env               # Keep the local file, stop tracking it
+```
+
+Git detects renames by comparing file contents when it displays history; it does not store a separate rename object. Use `git status` and `git diff --staged` to confirm the move or removal is staged as intended.
+
+### Inspect repository and configuration details
+
+```bash
+git remote -v                  # Show remote names and fetch/push URLs
+git remote show origin         # Show remote branches and tracking setup
+git branch -vv                 # Show upstream and ahead/behind counts
+git config --show-origin --list # Show settings and which file supplied them
+git rev-parse --show-toplevel  # Print the repository root
+git rev-parse HEAD             # Print the current commit ID
+git describe --tags --always   # Name the current commit using a nearby tag when possible
+```
+
+Configuration can be set at system, global, or repository scope. Repository-local values override global values, which override system values. `git config --show-origin --list` helps explain why a setting has its current value. Be careful before sharing its output because configuration may include private remote URLs or user details.
+
+### Submodules: repositories inside a repository
+
+A submodule records a specific commit of another repository at a path. It is useful when a project intentionally depends on another Git repository, but it adds setup and update steps.
+
+```bash
+git submodule add https://github.com/OWNER/DEPENDENCY.git vendor/dependency
+git status
+git commit -m "Add dependency submodule"
+```
+
+A fresh clone can initialize the recorded submodules with:
+
+```bash
+git clone --recurse-submodules <repository-url>
+```
+
+If already cloned:
+
+```bash
+git submodule update --init --recursive
+```
+
+After changing a submodule to a different commit, the parent repository records the new pointer. Review and commit that pointer change in the parent repo. A submodule is not automatically updated just because its upstream repository changed; choose the desired dependency commit explicitly.
