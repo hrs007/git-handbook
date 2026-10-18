@@ -721,3 +721,164 @@ git submodule update --init --recursive
 ```
 
 After changing a submodule to a different commit, the parent repository records the new pointer. Review and commit that pointer change in the parent repo. A submodule is not automatically updated just because its upstream repository changed; choose the desired dependency commit explicitly.
+
+## 🛟 Repair commits without losing work
+
+Before changing commit history, inspect the current state:
+
+```bash
+git status
+git log --oneline -5
+git diff
+git diff --staged
+```
+
+### Amend the latest local commit
+
+Use `--amend` when the last commit is yours and has not been shared, for example to correct its message or include a forgotten file:
+
+```bash
+git add forgotten-file.js
+git commit --amend --no-edit      # Keep the old message
+# or: git commit --amend -m "Correct commit message"
+```
+
+Amending replaces the commit with a new commit ID. If the old commit was pushed, other clones may still reference it. Prefer making a follow-up commit for shared history; amend only when you understand the coordination and any required force push.
+
+### Reset moves the branch; restore changes files
+
+`git reset` moves the current branch pointer and optionally updates the index and working tree. The default mode is `--mixed`.
+
+| Command | Branch pointer | Index | Working tree |
+| --- | --- | --- | --- |
+| `git reset --soft HEAD~1` | Moves back one commit | Keeps changes staged | Keeps changes |
+| `git reset --mixed HEAD~1` | Moves back one commit | Unstages changes | Keeps changes |
+| `git reset --hard HEAD~1` | Moves back one commit | Resets it | Resets files; local edits can be lost |
+
+For example, to undo the most recent unpushed commit but keep its changes available to recommit:
+
+```bash
+git reset --soft HEAD~1
+git status
+git diff --staged
+```
+
+Avoid `--hard` unless you have checked the target and are certain you do not need the affected work. `git reset --hard` can discard staged and unstaged changes. For a commit already shared with others, `git revert <commit>` is generally safer because it adds an undo commit instead of rewriting the branch.
+
+### Restore a file from a specific version
+
+```bash
+git restore --source=HEAD -- path/to/file   # Replace from current commit
+git restore --source=<commit> -- path/to/file # Replace from another commit
+git restore --source=HEAD --staged --worktree -- path/to/file # Reset index and working copy
+```
+
+These commands overwrite the selected file state. Inspect or save local edits first. `git restore --source=<commit> -- path` changes the working tree by default; add `--staged` when you also want to replace the index version.
+
+### Recover a commit using reflog
+
+The reflog records recent local movements of `HEAD` and branch references. It is often useful after a mistaken reset, amend, or rebase.
+
+```bash
+git reflog --date=local
+```
+
+Find the entry representing the commit or branch position you want. Before moving anything, create a safety branch pointing at that commit:
+
+```bash
+git branch rescue/before-recovery <commit-id>
+```
+
+You can inspect it using `git show <commit-id>` or `git switch --detach <commit-id>`. If you have confirmed that you want the current branch to point there, switch back to the branch and reset it deliberately. Reflog entries are local and expire over time; they are a recovery aid, not a permanent backup.
+
+## 🌐 Safer remote collaboration
+
+A remote is a named URL. `origin` is only a conventional name; a repository can have several remotes. Fetch first when you want to inspect incoming work without changing your current branch.
+
+```bash
+git remote -v
+git fetch origin
+git log --oneline --left-right HEAD...origin/main
+git diff HEAD...origin/main
+git status -sb
+```
+
+After fetch, `origin/main` is your local record of the remote's `main` branch. If your current branch is `main` and you want to accept only a fast-forward update:
+
+```bash
+git switch main
+git pull --ff-only origin main
+```
+
+`git pull` performs a fetch and then integrates the selected remote branch. Depending on config, integration may use a fast-forward, merge, or rebase. If you want to make that choice explicit, fetch and then run `git merge origin/main` or `git rebase origin/main` yourself. Do not pull blindly when you have uncommitted edits; commit, stash, or otherwise account for them first.
+
+If a push is rejected because the remote has commits you do not have, fetch and inspect the divergence. Integrate the remote changes, resolve any conflicts, then push again. Avoid force push as a routine fix. If rewriting your own branch is agreed and necessary, `git push --force-with-lease` checks that the remote ref has not advanced unexpectedly; it can still replace remote history, so coordinate before using it on shared branches.
+
+## 🌳 Worktrees in more detail
+
+A worktree is another checkout linked to the same repository database. It shares commits, refs, and objects, while each directory has its own working files and index. This is handy when you need to inspect or fix another branch without disturbing unfinished work in your current checkout.
+
+```bash
+git worktree list
+git worktree add ../urgent-fix -b fix/urgent origin/main
+# Work in ../urgent-fix, make and commit the fix
+git worktree remove ../urgent-fix
+git worktree prune
+```
+
+The branch given to `git worktree add` cannot already be checked out in another worktree. `git worktree remove` expects a clean worktree by default; inspect and preserve its changes before removing it. `git worktree prune` cleans stale records for worktree directories that were deleted outside Git. It does not delete a normal branch or its commits.
+
+## 🔍 Bisect with a repeatable test
+
+Bisect narrows down which commit first introduced a regression by checking revisions between a known-good and known-bad point. At each step, run the same test and report whether that revision is good or bad.
+
+```bash
+git bisect start
+git bisect bad HEAD
+git bisect good v1.2.0
+# Run the regression test on the checked-out revision
+git bisect good  # use this if the test passes
+git bisect bad   # use this if the test fails
+# Repeat until Git identifies the first bad commit
+git bisect reset
+```
+
+For a reliable result, use a test that gives the same answer each time and make sure it works on older revisions. If a revision cannot be tested because it does not build, mark it `git bisect skip`; Git will search around it and may identify a range rather than one exact commit. Always finish with `git bisect reset` to return to your original checkout.
+
+If the test is a command that exits zero for good and nonzero for bad, automate the checks:
+
+```bash
+git bisect start
+git bisect bad HEAD
+git bisect good <known-good-commit>
+git bisect run ./scripts/check-regression.sh
+git bisect reset
+```
+
+## 📦 Submodule lifecycle and common gotchas
+
+A parent repository stores a submodule's path, its source URL in `.gitmodules`, and the exact commit checked out there. It does not store the dependency's files as ordinary parent-repository files. Cloning the parent alone may therefore leave the submodule directory uninitialized.
+
+```bash
+git submodule status
+git submodule update --init --recursive
+git submodule update --remote vendor/dependency # Move to the configured upstream tip
+```
+
+The last command changes the checked-out submodule commit to a newer upstream commit; review and commit the resulting pointer change in the parent repository. It does not automatically mean “use the newest stable release.” For reproducible builds, commit a specific reviewed dependency pointer. When changing a submodule URL, edit `.gitmodules`, then synchronize local Git config:
+
+```bash
+git submodule sync --recursive
+```
+
+Before committing the parent, check both the submodule's own status and the parent status. A modified submodule may contain uncommitted work inside its own repository; that work must be committed or otherwise preserved there before the parent can record a useful pointer.
+
+## 🧭 A compact command priority map
+
+| Learn first | Learn next | Learn when needed |
+| --- | --- | --- |
+| `status`, `diff`, `add`, `commit` | `fetch`, `pull`, `push`, `remote` | `rebase -i`, `cherry-pick` |
+| `log`, `show`, `switch`, `branch` | `merge`, conflict resolution | `bisect`, `worktree`, submodules |
+| `restore --staged`, `revert` | `stash`, `tag`, `.gitignore` | `reflog`, careful `reset`, `clean` |
+
+The commands in the last column can rewrite history, remove files, or add repository complexity. Learn their effects first and inspect `git status` before and after using them.
