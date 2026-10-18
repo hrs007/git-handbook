@@ -223,3 +223,265 @@ If you have already shared a commit, `git revert` is usually the right choice. R
 ## 📄 License
 
 This handbook is available under the [MIT License](LICENSE).
+
+## 🧠 The four places Git tracks work
+
+Understanding these four places makes the commands easier to remember:
+
+| Place | What it contains | How to inspect it |
+| --- | --- | --- |
+| Working tree | The files currently on disk, including edits not selected for a commit. | `git status`, `git diff` |
+| Staging area (index) | The exact snapshot prepared for the next commit. | `git diff --staged` |
+| Local repository | Commits saved on this computer. | `git log` |
+| Remote repository | Commits shared with a host such as GitHub. | `git fetch`, `git remote -v` |
+
+The usual path is **edit → stage → commit → push**. `git add` copies selected changes into the index; it does not commit them. `git commit` records the index as a new local snapshot. `git push` sends local commits to a remote. `git fetch` downloads remote commits without changing your current files; `git pull` fetches and integrates them.
+
+## 🎯 Stage only the hunks you want
+
+The staging area is a draft of your *next commit*. It can contain only some files, or even only some lines from a file. This is useful when one file contains two unrelated changes and you want them in separate commits.
+
+### Interactive staging with `git add -p`
+
+Start by inspecting the file and repository:
+
+```bash
+git status
+git diff
+git add -p src/example.js
+```
+
+Git shows a **hunk**, a nearby group of added and removed lines, then prompts for an action. The exact prompt can vary slightly by Git version. The common choices are:
+
+| Key | Meaning |
+| --- | --- |
+| `y` | Stage this entire hunk. |
+| `n` | Leave this hunk unstaged and move on. |
+| `s` | Split the hunk into smaller hunks when Git can separate the changes. |
+| `e` | Edit the patch manually to stage only selected lines. |
+| `q` | Quit; keep any hunks already staged in this session. |
+| `a` | Stage this and all remaining hunks in this file. |
+| `d` | Leave this and all remaining hunks in this file unstaged. |
+| `?` | Show the available choices. |
+
+For changes that touch nearby lines, choose `s` first. If Git cannot split the hunk further, choose `e` to edit the patch. In the patch editor, keep the patch headers intact. To leave a changed line out of the staged patch, change its leading `+` or `-` marker to a space; do not delete the line. Save and close the editor to apply the edited patch. If unsure, quit the editor without saving, then review the staged diff.
+
+### Review exactly what will be committed
+
+```bash
+git diff --staged   # Only the selected hunks; this is the proposed commit
+git diff            # Remaining unstaged edits
+```
+
+If you staged the wrong hunk, you can unstage all changes from a file while preserving its working copy:
+
+```bash
+git restore --staged src/example.js
+```
+
+Then run `git add -p src/example.js` again. You can also reverse a specific staged patch interactively with `git restore --staged -p src/example.js` on current Git versions.
+
+### Commit the selected hunks
+
+```bash
+git commit -m "Describe the focused change"
+```
+
+The commit contains only the staged snapshot. Any edits left unstaged remain in your working tree for a later commit. After committing, check `git status` and `git diff` so you know what is still pending.
+
+### Interactive staging example
+
+Suppose you changed a function and also added a debug print in the same file. Stage the function change and leave the print for later:
+
+```bash
+git add -p src/example.js
+# At the function hunk: y (or s, then y for the intended smaller hunk)
+# At the debug-print hunk: n
+git diff --staged
+git diff
+git commit -m "Fix example calculation"
+```
+
+The first diff should contain the function fix only. The second diff should still show the debug print. This is called a **partial commit**: the index captures a deliberate subset of the working tree.
+
+## 🧩 Stage and unstage at different levels
+
+| Goal | Command | Result |
+| --- | --- | --- |
+| Stage one path | `git add path/to/file` | All current changes to that path enter the index. |
+| Stage all changes, including removals | `git add -A` | Stages tracked and untracked changes across the repository. |
+| Stage changes under this directory | `git add .` | Stages changes beneath the current directory. |
+| Stage only selected hunks | `git add -p` | Prompts for each hunk. |
+| Unstage one path, keep edits | `git restore --staged path/to/file` | Removes that path's changes from the index. |
+| Unstage selected hunks | `git restore --staged -p path/to/file` | Interactively removes hunks from the index. |
+| Discard unstaged edits | `git restore path/to/file` | Replaces the working copy with the indexed version; destructive. |
+| Discard all unstaged edits | `git restore .` | Replaces working files with indexed versions; destructive. |
+
+`git add .` is convenient but can stage unrelated work. For more control, name files explicitly or use `git add -p`, then always inspect `git diff --staged` before committing.
+
+## 🔀 Merge conflicts
+
+A conflict means Git could not decide how to combine edits to the same area. Git marks the affected file and pauses the merge; the file contains markers such as:
+
+```text
+<<<<<<< HEAD
+current branch's version
+=======
+incoming branch's version
+>>>>>>> feature/example
+```
+
+1. Run `git status` to find every conflicted path.
+2. Open each file and choose or combine the correct lines.
+3. Remove all conflict marker lines and save the file.
+4. Review the resolved file with `git diff`.
+5. Mark it resolved and stage the chosen result: `git add <file>`.
+6. Review the merge result with `git diff --staged`.
+7. Finish with `git commit` if Git has not already created the merge commit.
+
+To abandon an unfinished merge and return to its pre-merge state, use `git merge --abort`. This is different from fixing a conflict: abort only when you want to cancel the merge.
+
+## 🪄 Rebase and clean up local history
+
+A rebase replays commits from your branch on top of another base. It can make a feature branch easier to review, but it creates new commit IDs. Do not rebase commits other people already use unless your team has agreed to rewrite that history.
+
+```bash
+git fetch origin
+git switch feature/example
+git rebase origin/main
+```
+
+If a conflict occurs, resolve the file, stage it, and continue:
+
+```bash
+git status
+git add <resolved-file>
+git rebase --continue
+```
+
+Use `git rebase --abort` to return to the pre-rebase state, or `git rebase --skip` only when you intentionally want to omit the current commit.
+
+Interactive rebase is useful for cleaning up your **own unpublished commits**:
+
+```bash
+git rebase -i HEAD~4
+```
+
+The editor lists the four commits oldest first. Common actions include `pick` (keep), `reword` (change message), `edit` (pause to amend), `squash` (combine commits and edit the combined message), `fixup` (combine and discard the later message), and `drop` (remove a commit). Save and close to start. Resolve any conflicts and use `git rebase --continue`; use `git rebase --abort` to cancel.
+
+## 🧳 Temporarily set changes aside with stash
+
+A stash lets you switch tasks without committing unfinished work. By default, untracked files are not included; add `-u` to include them.
+
+```bash
+git stash push -m "unfinished search work"     # Save tracked edits
+git stash push -u -m "search work with new files" # Include untracked files
+git stash list                                  # Find saved stashes
+git stash show -p stash@{0}                     # Inspect one stash
+git stash apply stash@{0}                       # Reapply and keep the stash
+git stash pop                                  # Reapply and remove the newest stash
+git stash drop stash@{0}                        # Remove one stash after checking it
+git stash clear                                # Remove every stash; use carefully
+```
+
+`apply` keeps the saved copy, while `pop` removes it after applying successfully. A stash is local temporary storage, not a backup or a substitute for a commit.
+
+## 🧹 Ignore files and stop tracking generated or secret files
+
+Add patterns to `.gitignore` at the repository root. For example:
+
+```gitignore
+.env
+.venv/
+__pycache__/
+*.py[cod]
+node_modules/
+build/
+.DS_Store
+```
+
+`.gitignore` prevents matching **untracked** files from being added by default; it does not remove a file already committed or tracked. To stop tracking a file while keeping the local copy:
+
+```bash
+git rm --cached .env
+git commit -m "Stop tracking local environment file"
+```
+
+Check which ignore rule applies with `git check-ignore -v path/to/file`. If a secret was committed, removing it in a later commit does not erase it from history; rotate the exposed credential and follow your host's guidance for removing sensitive data from history.
+
+## 🔎 Search commits and find regressions
+
+```bash
+git log --grep="authentication" --oneline  # Search commit messages
+git log -S "calculateTotal" --oneline       # Find commits adding/removing this exact string
+git log -G "calculate.*Total" --oneline     # Search changed lines with a regular expression
+git blame -L 50,80 src/example.js             # See the last commit for lines 50–80
+```
+
+`git bisect` performs a binary search through history to locate the commit that introduced a bug. You need a known-good commit and a commit where the bug exists:
+
+```bash
+git bisect start
+git bisect bad                 # Current checkout has the bug
+git bisect good <known-good-commit>
+# Test the checked-out revision, then tell Git:
+git bisect good                # or: git bisect bad
+git bisect reset               # Return to the original branch and revision
+```
+
+Repeat the test and `good`/`bad` marking until Git identifies the first bad commit. If the test can be automated, `git bisect run <test-command>` can perform the search for you.
+
+## 🏷️ Tags, remote branches, and tracking
+
+Tags are names for particular commits, commonly used for releases. Annotated tags include metadata and are usually preferred for published releases.
+
+```bash
+git tag -a v1.0.0 -m "Release 1.0.0"  # Create an annotated tag
+git show v1.0.0                        # Inspect it
+git push origin v1.0.0                 # Publish one tag
+git tag -d v1.0.0                       # Delete a local tag
+git push origin --delete v1.0.0         # Delete a remote tag
+```
+
+A **remote-tracking branch** such as `origin/main` is your local record of a branch last seen on the remote. `git fetch` updates that record. A local branch can track a remote branch so `git pull` and `git push` know their default destination.
+
+```bash
+git branch -vv                               # Show branches and upstreams
+git switch -c feature/example                # Create a local branch
+git push -u origin feature/example           # Publish it and set its upstream
+git branch --set-upstream-to=origin/main main # Set upstream explicitly
+git fetch --prune                             # Fetch and remove stale remote refs
+git push origin --delete feature/example     # Delete a remote branch
+```
+
+## 🧰 Worktrees and aliases
+
+A worktree creates another working directory connected to the same local repository. This lets you check out a second branch in a separate folder without stashing your current changes.
+
+```bash
+git worktree add ../hotfix hotfix/login       # Add a worktree for an existing branch
+git worktree add -b feature/new ../new-feature # Create a branch and its worktree
+git worktree list                              # List worktrees
+git worktree remove ../hotfix                  # Remove a clean worktree
+```
+
+Git aliases shorten frequent commands. They are optional and only affect your configuration:
+
+```bash
+git config --global alias.st status
+git config --global alias.co switch
+git config --global alias.br branch
+git config --global alias.lg "log --oneline --graph --decorate --all"
+```
+
+Then use `git st` or `git lg`. Learn the full command first so aliases do not hide what Git is doing.
+
+## 📈 A practical learning order
+
+1. **Daily essentials:** `status`, `diff`, `add`, `commit`, `log`, `switch`, `branch`.
+2. **Collaboration:** `fetch`, `pull`, `push`, `remote`, `merge`.
+3. **Careful recovery:** `restore`, `revert`, `reset`, `stash`, `reflog`.
+4. **History and debugging:** `rebase`, `rebase -i`, `cherry-pick`, `bisect`.
+5. **Useful extras:** `tag`, `clean`, `worktree`, `add -p`.
+
+You do not need to memorize every option. Build the habit of checking `git status`, reviewing `git diff` and `git diff --staged`, and understanding whether a command changes the working tree, index, local commits, or remote repository.
